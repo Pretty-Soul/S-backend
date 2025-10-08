@@ -5,7 +5,11 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-app.use(cors());
+// Replace your old app.use(cors()); with this more specific configuration
+
+app.use(cors({
+  origin: 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app/' // <-- Paste your Netlify URL here
+}));
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
