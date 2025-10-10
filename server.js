@@ -6,32 +6,27 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-// Replace your old app.use(cors()); with this more specific configuration
-
-app.use(cors({
-  origin: 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app/' // <-- Paste your Netlify URL here
-}));
+app.use(cors({ origin: 'https://your-netlify-url.netlify.app' })); // Make sure your Netlify URL is correct
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
+// Import the router and the setDb function from your routes file
+const { router: apiRoutes, setDb } = require('./routes/shopRoutes');
+
 async function startServer() {
     try {
         await client.connect();
-        const db = client.db("susegad_supplies");
+        const database = client.db("susegad_supplies");
+        
+        // "Inject" the database into your routes file
+        setDb(database);
+        
         console.log("✅ Successfully connected to MongoDB!");
 
-        // Import and use the separate route files
-        const authRoutes = require('./routes/authRoutes')(db);
-        const productRoutes = require('./routes/productRoutes')(db);
-        const categoryRoutes = require('./routes/categoryRoutes')(db);
-        const shopRoutes = require('./routes/shopRoutes')(db, client);
-
-        app.use(authRoutes);
-        app.use(productRoutes);
-        app.use(categoryRoutes);
-        app.use(shopRoutes);
+        // Use the imported router
+        app.use(apiRoutes);
 
         app.listen(port, () => {
             console.log(`🚀 Server running on http://localhost:${port}`);
