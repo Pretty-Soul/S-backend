@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
-const crypto = require('crypto');
+const crypto = require('crypto'); // Needed for secure token generation
 const { sendVerificationEmail } = require('../utils/emailSender'); // Ensure this path is correct
 
 // Export a function that accepts the database connection
@@ -12,38 +12,47 @@ module.exports = function(db) {
     router.post('/signup', async (req, res) => {
         try {
             const { name, email, password } = req.body;
-            const existingUser = await db.collection('users').findOne({ email: email });
+            let user = await db.collection('users').findOne({ email: email });
 
-            if (existingUser && !existingUser.isEmailVerified) {
-                const verificationCode = crypto.randomInt(100000, 999999).toString();
-                const expiryDate = new Date(Date.now() + 15 * 60 * 1000);
+            // Generate Verification Token
+            const verificationToken = crypto.randomBytes(32).toString('hex');
+            const expiryDate = new Date(Date.now() + 60 * 60 * 1000); // Token expires in 1 hour
+
+            // Construct Verification Link (Use your *frontend* URL here)
+            const frontendUrl = process.env.FRONTEND_URL || 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app'; // Get from .env or default
+            const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
+
+            if (user && !user.isEmailVerified) {
+                // User exists but isn't verified - update token and resend email
                 await db.collection('users').updateOne(
                     { email: email },
-                    { $set: { emailVerificationCode: verificationCode, verificationCodeExpires: expiryDate } }
+                    { $set: { emailVerificationToken: verificationToken, emailVerificationTokenExpires: expiryDate } }
                 );
-                await sendVerificationEmail(email, verificationCode);
-                return res.status(200).json({ message: "Account exists but wasn't verified. New verification email sent." });
-            } else if (existingUser) {
+                await sendVerificationEmail(email, verificationLink); // Send the LINK now
+                return res.status(200).json({ message: "Account exists but wasn't verified. New verification link sent to your email." });
+
+            } else if (user) {
                 return res.status(409).json({ message: "Email already exists and is verified." });
             }
 
+            // --- If user does NOT exist, create them ---
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(password, saltRounds);
-            const verificationCode = crypto.randomInt(100000, 999999).toString();
-            const expiryDate = new Date(Date.now() + 15 * 60 * 1000);
 
             await db.collection('users').insertOne({
                 name, email, password: hashedPassword, addresses: [],
-                isEmailVerified: false, emailVerificationCode: verificationCode,
-                verificationCodeExpires: expiryDate
+                isEmailVerified: false,
+                emailVerificationToken: verificationToken, // Store the token
+                emailVerificationTokenExpires: expiryDate  // Store expiry
             });
 
-            const emailSent = await sendVerificationEmail(email, verificationCode);
+            const emailSent = await sendVerificationEmail(email, verificationLink); // Send the LINK now
             if (!emailSent) {
                 console.error(`Failed to send verification email to ${email}, but user was created.`);
                 return res.status(201).json({ message: "User created, but failed to send verification email. Please try verifying later or contact support." });
             }
-            res.status(201).json({ message: "User created! Please check your email for a verification code." });
+
+            res.status(201).json({ message: "User created! Please check your email for a verification link." });
         } catch (err) {
             console.error("Error in /signup:", err);
             res.status(500).json({ message: "Error creating user." });
@@ -56,10 +65,11 @@ module.exports = function(db) {
             const user = await db.collection('users').findOne({ email: email });
             if (!user) { return res.status(401).json({ message: "Invalid credentials." }); }
 
+            // *** Prevent login if email isn't verified ***
             if (!user.isEmailVerified) {
                  return res.status(403).json({
-                     message: "Please verify your email address first. Check your inbox for the code.",
-                     needsVerification: true,
+                     message: "Please verify your email address first. Check your inbox for the verification link.",
+                     needsVerification: true, // Keep this flag
                      email: user.email
                  });
             }
@@ -73,38 +83,37 @@ module.exports = function(db) {
         }
     });
 
-    router.post('/admin/login', async (req, res) => {
+    // --- NEW EMAIL VERIFICATION ROUTE (Handles the Link Click) ---
+    router.post('/verify-email-link', async (req, res) => {
         try {
-            const { email, password } = req.body;
-            const user = await db.collection('users').findOne({ email: email });
-            if (!user) { return res.status(401).json({ message: "Invalid admin credentials." }); }
-            const passwordMatch = await bcrypt.compare(password, user.password);
-            if (!passwordMatch) { return res.status(401).json({ message: "Invalid admin credentials." }); }
-            res.status(200).json({ message: "Admin login successful!", user: { name: user.name, email: user.email, role: 'admin' } });
-        } catch (err) {
-            console.error("Error in /admin/login:", err);
-            res.status(500).json({ message: "Error logging in as admin." });
-        }
-    });
+            const { token } = req.body;
+            if (!token) {
+                return res.status(400).json({ message: "Verification token is missing." });
+            }
 
-    router.post('/verify-email-code', async (req, res) => {
-        try {
-            const { email, code } = req.body;
-            const user = await db.collection('users').findOne({ email: email });
+            // Find user by the token
+            const user = await db.collection('users').findOne({
+                emailVerificationToken: token,
+                // Check if token hasn't expired
+                emailVerificationTokenExpires: { $gt: new Date() }
+            });
 
-            if (!user) { return res.status(404).json({ message: "User not found." }); }
-            if (user.isEmailVerified) { return res.status(400).json({ message: "Email already verified." }); }
-            if (user.emailVerificationCode !== code) { return res.status(400).json({ message: "Invalid verification code." }); }
-            if (new Date() > new Date(user.verificationCodeExpires)) { return res.status(400).json({ message: "Verification code expired." }); }
+            if (!user) {
+                // Could be invalid token OR expired token
+                return res.status(400).json({ message: "Verification link is invalid or has expired." });
+            }
 
+            // Verification successful! Update user document
             await db.collection('users').updateOne(
-                { email: email },
-                { $set: { isEmailVerified: true }, $unset: { emailVerificationCode: "", verificationCodeExpires: "" } }
+                { _id: user._id }, // Use user's _id for update
+                { $set: { isEmailVerified: true }, $unset: { emailVerificationToken: "", emailVerificationTokenExpires: "" } }
             );
-            res.status(200).json({ message: "Email verified successfully! Please log in." });
+
+            res.status(200).json({ message: "Email verified successfully! You can now log in." });
+
         } catch (err) {
-            console.error("Error verifying email code:", err);
-            res.status(500).json({ message: "Error verifying email code." });
+            console.error("Error verifying email link:", err);
+            res.status(500).json({ message: "Error verifying email." });
         }
     });
 
