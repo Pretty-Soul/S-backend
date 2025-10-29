@@ -6,7 +6,10 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-app.use(cors({ origin: 'https://your-netlify-url.netlify.app' })); // Make sure your Netlify URL is correct
+// IMPORTANT: Replace this with your actual Netlify URL
+const netlifyUrl = 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app';
+
+app.use(cors({ origin: netlifyUrl }));
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
@@ -20,12 +23,12 @@ async function startServer() {
         await client.connect();
         const database = client.db("susegad_supplies");
         
-        // "Inject" the database into your routes file
+        // "Inject" the database connection into your routes file
         setDb(database);
         
         console.log("✅ Successfully connected to MongoDB!");
 
-        // Use the imported router
+        // Use the imported router for all API routes
         app.use(apiRoutes);
 
         app.listen(port, () => {
