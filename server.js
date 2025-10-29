@@ -19,30 +19,28 @@ const initializeApiRoutes = require('./routes/shopRoutes');
 
 async function startServer() {
     try {
-        await client.connect();
-        const database = client.db("susegad_supplies");
-        console.log("✅ Successfully connected to MongoDB!");
+        // ... (database connection, setDb, app.use('/', apiRouter)) ...
 
-        // Initialize the routes by passing the database connection
-        const apiRouter = initializeApiRoutes(database); 
-        
-        console.log("Attempting to register API routes...");
-        app.use('/', apiRouter); // Use the router returned by the function
         console.log("✅ API routes should be registered now.");
 
+        // --- ADD THESE TEST ROUTES ---
+        app.get('/products', (req, res) => {
+            console.log("!!! Reached /products route defined directly in server.js !!!");
+            res.status(200).json([{ name: "Test Product", category: "Test" }]);
+        });
+
+        app.get('/categories', (req, res) => {
+            console.log("!!! Reached /categories route defined directly in server.js !!!");
+            res.status(200).json([{ name: "Test Category" }]);
+        });
+        // --- END OF ADDITIONS ---
+
         // Keep the health check route
-        app.get('/health', (req, res) => { // Changed path slightly just in case '/' conflicts
-            res.status(200).send('Backend server is running!');
-        });
+        app.get('/health', (req, res) => { /* ... */ });
 
-        app.listen(port, () => {
-            console.log(`🚀 Server running locally on http://localhost:${port}`); 
-        });
+        app.listen(port, () => { /* ... */ });
 
-    } catch (err) {
-        console.error("Failed to start server", err);
-        process.exit(1);
-    }
+    } catch (err) { /* ... */ }
 }
 
 startServer();
