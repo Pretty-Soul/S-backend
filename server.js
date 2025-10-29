@@ -7,7 +7,7 @@ const app = express();
 const port = 3000;
 
 // IMPORTANT: Replace this with your actual Netlify URL if it changed
-const netlifyUrl = 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app';
+const netlifyUrl = 'https://susegad-supplies.netlify.app/';
 
 app.use(cors({ origin: netlifyUrl }));
 app.use(express.json());
