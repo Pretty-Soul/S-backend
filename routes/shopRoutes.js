@@ -29,12 +29,33 @@ module.exports = function(db) {
             if (!user) { return res.status(401).json({ message: "Invalid credentials." }); }
             const passwordMatch = await bcrypt.compare(password, user.password);
             if (!passwordMatch) { return res.status(401).json({ message: "Invalid credentials." }); }
+            // Send back only necessary user info (no password)
             res.status(200).json({ message: "Login successful!", user: { name: user.name, email: user.email } });
         } catch (err) {
             console.error("Error in /login:", err);
             res.status(500).json({ message: "Error logging in." });
         }
     });
+
+     // --- ADMIN LOGIN ROUTE (Assuming a separate logic or role check) ---
+    router.post('/admin/login', async (req, res) => {
+        try {
+            const { email, password } = req.body;
+            // IMPORTANT: Add proper admin role checking here in a real application
+            // For now, it's the same as regular login, but add role if needed
+            const user = await db.collection('users').findOne({ email: email });
+             // In a real app, you'd check: if (!user || user.role !== 'admin')
+            if (!user) { return res.status(401).json({ message: "Invalid admin credentials." }); }
+            const passwordMatch = await bcrypt.compare(password, user.password);
+            if (!passwordMatch) { return res.status(401).json({ message: "Invalid admin credentials." }); }
+            // Include role in the response if you add it to your user schema
+            res.status(200).json({ message: "Admin login successful!", user: { name: user.name, email: user.email, role: 'admin' } }); // Example role
+        } catch (err) {
+            console.error("Error in /admin/login:", err);
+            res.status(500).json({ message: "Error logging in as admin." });
+        }
+    });
+
 
     // --- USER PROFILE & ADDRESS ROUTES ---
     router.get('/user/addresses/:email', async (req, res) => {
@@ -52,7 +73,7 @@ module.exports = function(db) {
             const { userEmail, newAddress } = req.body;
             const user = await db.collection('users').findOne({ email: userEmail });
             if (!user) { return res.status(404).json({ message: "User not found." }); }
-            const addressExists = user.addresses && user.addresses.some(
+            const addressExists = user.addresses?.some(
                 savedAddr =>
                     savedAddr.fullName.toLowerCase() === newAddress.fullName.toLowerCase() &&
                     savedAddr.address.toLowerCase() === newAddress.address.toLowerCase() &&
@@ -86,7 +107,7 @@ module.exports = function(db) {
 
     router.delete('/user/addresses/:addressId', async (req, res) => {
         try {
-            const { userEmail } = req.body; // Assuming userEmail is sent in the body for verification
+            const { userEmail } = req.body; // Might need userEmail from req.user if using auth middleware
             const { addressId } = req.params;
             await db.collection('users').updateOne(
                 { email: userEmail },
@@ -132,6 +153,7 @@ module.exports = function(db) {
 
     // --- PRODUCT ROUTES ---
     router.get('/products', async (req, res) => {
+        console.log("Received request for GET /products"); // Logging added
         try {
             const products = await db.collection('products').find({}).sort({ name: 1 }).toArray();
             res.status(200).json(products);
@@ -142,6 +164,7 @@ module.exports = function(db) {
     });
 
     router.get('/products/suggestions', async (req, res) => {
+        console.log("Received request for GET /products/suggestions"); // Logging added
         try {
             const query = req.query.q;
             if (!query) { return res.json([]); }
@@ -158,6 +181,7 @@ module.exports = function(db) {
     });
 
     router.get('/products/:id', async (req, res) => {
+        console.log(`Received request for GET /products/${req.params.id}`); // Logging added
         try {
             const productId = req.params.id;
             const product = await db.collection('products').findOne({ _id: new ObjectId(productId) });
@@ -171,6 +195,7 @@ module.exports = function(db) {
 
     // --- CATEGORY ROUTES ---
     router.get('/categories', async (req, res) => {
+        console.log("Received request for GET /categories"); // Logging added
         try {
             const categories = await db.collection('categories').find({}).toArray();
             res.status(200).json(categories);
@@ -182,17 +207,19 @@ module.exports = function(db) {
 
     // --- TESTIMONIALS ROUTE ---
     router.get('/testimonials', async (req, res) => {
+        console.log("Received request for GET /testimonials"); // Logging added
         try {
             const testimonials = await db.collection('testimonials').find({}).limit(3).toArray();
             res.status(200).json(testimonials);
         } catch (err) {
-            console.error("Error fetching testimonials:", err);
+             console.error("Error fetching testimonials:", err);
             res.status(500).json({ message: "Error fetching testimonials." });
         }
     });
 
     // --- CART & ORDER ROUTES ---
     router.get('/cart/:email', async (req, res) => {
+        console.log(`Received request for GET /cart/${req.params.email}`); // Logging added
         try {
             const userEmail = req.params.email;
             let cart = await db.collection('carts').findOne({ userEmail: userEmail });
@@ -205,6 +232,7 @@ module.exports = function(db) {
     });
 
     router.post('/cart/update', async (req, res) => {
+        console.log("Received request for POST /cart/update"); // Logging added
         try {
             const { userEmail, productId, quantity, productName, price } = req.body;
             let cart = await db.collection('carts').findOne({ userEmail });
@@ -227,6 +255,7 @@ module.exports = function(db) {
     });
 
     router.post('/checkout', async (req, res) => {
+        console.log("Received request for POST /checkout"); // Logging added
         try {
             const { userEmail, shippingAddress, shippingMethod } = req.body;
             const cart = await db.collection('carts').findOne({ userEmail });
@@ -252,6 +281,7 @@ module.exports = function(db) {
     });
 
     router.get('/orders/:email', async (req, res) => {
+        console.log(`Received request for GET /orders/${req.params.email}`); // Logging added
         try {
             const userEmail = req.params.email;
             const orders = await db.collection('orders').find({ userEmail: userEmail }).sort({ orderDate: -1 }).toArray();
@@ -259,6 +289,27 @@ module.exports = function(db) {
         } catch (err) {
             console.error("Error in /orders/:email:", err);
             res.status(500).json({ message: "Error fetching order history." });
+        }
+    });
+    
+    // --- SEARCH ROUTE ---
+    router.get('/search', async (req, res) => {
+        console.log(`Received request for GET /search?q=${req.query.q}`); // Logging added
+        try {
+            const query = req.query.q;
+            if (!query) {
+                return res.status(400).json({ message: "Search query is required." });
+            }
+            const searchResults = await db.collection('products').find({
+                $or: [
+                    { name: { $regex: query, $options: 'i' } },
+                    { description: { $regex: query, $options: 'i' } }
+                ]
+            }).toArray();
+            res.status(200).json(searchResults);
+        } catch (err) {
+            console.error("Error during search:", err);
+            res.status(500).json({ message: "Error searching products." });
         }
     });
 
