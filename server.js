@@ -16,7 +16,8 @@ const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
 // Import the router and the setDb function from your routes file
-const { router: apiRoutes, setDb } = require('./routes/shopRoutes');
+// Ensure the path './routes/shopRoutes' is correct relative to server.js
+const { router: apiRoutes, setDb } = require('./routes/shopRoutes'); 
 
 async function startServer() {
     try {
@@ -28,11 +29,15 @@ async function startServer() {
         
         console.log("✅ Successfully connected to MongoDB!");
 
-        // Use the imported router for all API routes
-        app.use(apiRoutes);
+        console.log("Attempting to register API routes...");
+        // Explicitly use the root path '/' for all routes defined in shopRoutes
+        app.use('/', apiRoutes); // <--- THIS IS THE UPDATED LINE
+        console.log("✅ API routes should be registered now.");
+
 
         app.listen(port, () => {
-            console.log(`🚀 Server running on http://localhost:${port}`);
+            // This log is primarily for local development, Render uses its own mechanisms
+            console.log(`🚀 Server running locally on http://localhost:${port}`); 
         });
 
     } catch (err) {
