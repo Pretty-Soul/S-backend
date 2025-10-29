@@ -1,10 +1,12 @@
 const express = require('express');
+const router = express.Router();
 const { ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto'); // For generating random codes
+const { sendVerificationEmail } = require('../utils/emailSender'); // Import the email function
 
-// Export a function that creates and configures the router
+// Export a function that accepts the database connection
 module.exports = function(db) {
-    const router = express.Router(); // Create router INSIDE the function
 
     // --- AUTH ROUTES ---
     router.post('/signup', async (req, res) => {
@@ -14,8 +16,32 @@ module.exports = function(db) {
             if (existingUser) { return res.status(409).json({ message: "Email already exists." }); }
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(password, saltRounds);
-            await db.collection('users').insertOne({ name, email, password: hashedPassword, addresses: [] });
-            res.status(201).json({ message: "User created successfully!" });
+
+            const verificationCode = crypto.randomInt(100000, 999999).toString(); // Generate 6-digit code
+            const expiryDate = new Date(Date.now() + 15 * 60 * 1000); // Code expires in 15 minutes
+
+            await db.collection('users').insertOne({
+                name,
+                email,
+                password: hashedPassword,
+                addresses: [],
+                isEmailVerified: false, // Start as unverified
+                emailVerificationCode: verificationCode,
+                verificationCodeExpires: expiryDate
+            });
+
+            // --- Send the verification email ---
+            const emailSent = await sendVerificationEmail(email, verificationCode);
+
+            if (!emailSent) {
+                // Log the error but still let the user know signup *partially* worked
+                console.error(`Failed to send verification email to ${email}, but user was created.`);
+                // You might want a different message or status code depending on your desired UX
+                return res.status(201).json({ message: "User created, but failed to send verification email. Please contact support or try resending later." });
+            }
+            // --- End email sending ---
+
+            res.status(201).json({ message: "User created! Please check your email for a verification code." });
         } catch (err) {
             console.error("Error in /signup:", err);
             res.status(500).json({ message: "Error creating user." });
@@ -27,6 +53,12 @@ module.exports = function(db) {
             const { email, password } = req.body;
             const user = await db.collection('users').findOne({ email: email });
             if (!user) { return res.status(401).json({ message: "Invalid credentials." }); }
+
+            // Optional: Check if email is verified before allowing login
+            // if (!user.isEmailVerified) {
+            //     return res.status(403).json({ message: "Please verify your email address first." });
+            // }
+
             const passwordMatch = await bcrypt.compare(password, user.password);
             if (!passwordMatch) { return res.status(401).json({ message: "Invalid credentials." }); }
             res.status(200).json({ message: "Login successful!", user: { name: user.name, email: user.email } });
@@ -36,6 +68,7 @@ module.exports = function(db) {
         }
     });
 
+     // --- ADMIN LOGIN ROUTE ---
     router.post('/admin/login', async (req, res) => {
         try {
             const { email, password } = req.body;
@@ -48,6 +81,31 @@ module.exports = function(db) {
         } catch (err) {
             console.error("Error in /admin/login:", err);
             res.status(500).json({ message: "Error logging in as admin." });
+        }
+    });
+
+    // --- NEW EMAIL VERIFICATION ROUTE ---
+    router.post('/verify-email-code', async (req, res) => {
+        try {
+            const { email, code } = req.body;
+            const user = await db.collection('users').findOne({ email: email });
+
+            if (!user) { return res.status(404).json({ message: "User not found." }); }
+            if (user.isEmailVerified) { return res.status(400).json({ message: "Email already verified." }); }
+            if (user.emailVerificationCode !== code) { return res.status(400).json({ message: "Invalid verification code." }); }
+            if (new Date() > user.verificationCodeExpires) { return res.status(400).json({ message: "Verification code expired." }); }
+
+            // Verification successful! Update user document
+            await db.collection('users').updateOne(
+                { email: email },
+                { $set: { isEmailVerified: true }, $unset: { emailVerificationCode: "", verificationCodeExpires: "" } }
+            );
+
+            res.status(200).json({ message: "Email verified successfully! You can now log in." });
+
+        } catch (err) {
+            console.error("Error verifying email code:", err);
+            res.status(500).json({ message: "Error verifying email code." });
         }
     });
 
@@ -90,7 +148,7 @@ module.exports = function(db) {
             const { addressId } = req.params;
             await db.collection('users').updateOne(
                 { email: userEmail, "addresses._id": new ObjectId(addressId) },
-                { $set: { "addresses.$": { ...address, _id: new ObjectId(addressId) } } } // Ensure _id is preserved
+                { $set: { "addresses.$": { ...address, _id: new ObjectId(addressId) } } }
             );
             res.status(200).json({ message: "Address updated successfully." });
         } catch (err) {
@@ -101,8 +159,7 @@ module.exports = function(db) {
 
     router.delete('/user/addresses/:addressId', async (req, res) => {
         try {
-             // In a real app, verify userEmail against logged-in user (req.user from auth middleware)
-            const userEmail = req.body.userEmail; // Or req.user.email
+            const userEmail = req.body.userEmail; // Or req.user.email if using auth middleware
             const { addressId } = req.params;
             await db.collection('users').updateOne(
                 { email: userEmail },
@@ -119,7 +176,7 @@ module.exports = function(db) {
         try {
             const user = await db.collection('users').findOne(
                 { email: req.params.email },
-                { projection: { password: 0 } } // Exclude password
+                { projection: { password: 0 } }
             );
             if (user) {
                 res.status(200).json(user);
@@ -179,7 +236,6 @@ module.exports = function(db) {
         console.log(`Received request for GET /products/${req.params.id}`);
         try {
             const productId = req.params.id;
-             // Add validation for ObjectId
             if (!ObjectId.isValid(productId)) {
                  return res.status(400).json({ message: "Invalid product ID format." });
             }
@@ -203,6 +259,36 @@ module.exports = function(db) {
             res.status(500).json({ message: "Error fetching categories." });
         }
     });
+
+     router.post('/categories', async (req, res) => {
+         console.log("Received request for ADMIN POST /categories");
+         // Add auth check here
+         try {
+             const { name } = req.body;
+             if (!name) return res.status(400).json({ message: "Category name required." });
+             const existing = await db.collection('categories').findOne({ name: name });
+             if (existing) return res.status(409).json({ message: "Category already exists." });
+             await db.collection('categories').insertOne({ name });
+             res.status(201).json({ message: "Category added." });
+         } catch (err) {
+             console.error("Error adding category (admin):", err);
+             res.status(500).json({ message: "Error adding category." });
+         }
+     });
+
+     router.delete('/categories/:name', async (req, res) => {
+         console.log(`Received request for ADMIN DELETE /categories/${req.params.name}`);
+         // Add auth check here
+         try {
+             const categoryName = decodeURIComponent(req.params.name);
+             const result = await db.collection('categories').deleteOne({ name: categoryName });
+             if (result.deletedCount === 0) return res.status(404).json({ message: "Category not found." });
+             res.status(200).json({ message: "Category deleted." });
+         } catch (err) {
+             console.error("Error deleting category (admin):", err);
+             res.status(500).json({ message: "Error deleting category." });
+         }
+     });
 
     // --- TESTIMONIALS ROUTE ---
     router.get('/testimonials', async (req, res) => {
@@ -262,9 +348,7 @@ module.exports = function(db) {
             
             for (const item of cart.items) {
                 const realProductIdString = item.productId.split('-')[0];
-                 if (!ObjectId.isValid(realProductIdString)) {
-                     return res.status(400).json({ message: `Invalid product ID format found in cart for item ${item.name}` });
-                 }
+                if (!ObjectId.isValid(realProductIdString)) { return res.status(400).json({ message: `Invalid product ID format found in cart for item ${item.name}` }); }
                 const realProductId = new ObjectId(realProductIdString);
                 const product = await db.collection('products').findOne({ _id: realProductId });
                 if (!product) { return res.status(400).json({ message: `Product not found for ${item.name}.` }); }
@@ -300,9 +384,7 @@ module.exports = function(db) {
         console.log(`Received request for GET /search?q=${req.query.q}`);
         try {
             const query = req.query.q;
-            if (!query) {
-                return res.status(400).json({ message: "Search query is required." });
-            }
+            if (!query) { return res.status(400).json({ message: "Search query is required." }); }
             const searchResults = await db.collection('products').find({
                 $or: [
                     { name: { $regex: query, $options: 'i' } },
@@ -315,41 +397,32 @@ module.exports = function(db) {
             res.status(500).json({ message: "Error searching products." });
         }
     });
-
+    
     // --- ADMIN PRODUCT ROUTES (simplified example - needs role check middleware ideally) ---
      router.post('/products', async (req, res) => {
          console.log("Received request for ADMIN POST /products");
-        // Add authentication/authorization check here
-        try {
-            const newProduct = req.body;
-            if (!newProduct.name || !newProduct.variations || !newProduct.images) {
-                return res.status(400).json({ message: "Missing required product fields." });
-            }
-            const result = await db.collection('products').insertOne(newProduct);
-            res.status(201).json(result);
-        } catch (err) {
-             console.error("Error adding product (admin):", err);
-             res.status(500).json({ message: "Error adding product." });
-        }
-    });
+         // Add auth check here
+         try {
+             const newProduct = req.body;
+             if (!newProduct.name || !newProduct.variations || !newProduct.images) { return res.status(400).json({ message: "Missing required product fields." }); }
+             const result = await db.collection('products').insertOne(newProduct);
+             res.status(201).json(result);
+         } catch (err) {
+              console.error("Error adding product (admin):", err);
+              res.status(500).json({ message: "Error adding product." });
+         }
+     });
 
     router.put('/products/:id', async (req, res) => {
          console.log(`Received request for ADMIN PUT /products/${req.params.id}`);
-         // Add authentication/authorization check here
+         // Add auth check here
         try {
             const productId = req.params.id;
-             if (!ObjectId.isValid(productId)) {
-                 return res.status(400).json({ message: "Invalid product ID format." });
-            }
+             if (!ObjectId.isValid(productId)) { return res.status(400).json({ message: "Invalid product ID format." }); }
             const updatedData = req.body;
-            delete updatedData._id; // Prevent changing _id
-            const result = await db.collection('products').updateOne(
-                { _id: new ObjectId(productId) },
-                { $set: updatedData }
-            );
-             if (result.matchedCount === 0) {
-                 return res.status(404).json({ message: "Product not found" });
-             }
+            delete updatedData._id;
+            const result = await db.collection('products').updateOne({ _id: new ObjectId(productId) }, { $set: updatedData });
+             if (result.matchedCount === 0) { return res.status(404).json({ message: "Product not found" }); }
             res.status(200).json(result);
         } catch (err) {
              console.error("Error updating product (admin):", err);
@@ -359,54 +432,18 @@ module.exports = function(db) {
 
     router.delete('/products/:id', async (req, res) => {
          console.log(`Received request for ADMIN DELETE /products/${req.params.id}`);
-         // Add authentication/authorization check here
+         // Add auth check here
         try {
             const productId = req.params.id;
-             if (!ObjectId.isValid(productId)) {
-                 return res.status(400).json({ message: "Invalid product ID format." });
-            }
+             if (!ObjectId.isValid(productId)) { return res.status(400).json({ message: "Invalid product ID format." }); }
             const result = await db.collection('products').deleteOne({ _id: new ObjectId(productId) });
-             if (result.deletedCount === 0) {
-                 return res.status(404).json({ message: "Product not found" });
-             }
+             if (result.deletedCount === 0) { return res.status(404).json({ message: "Product not found" }); }
             res.status(200).json(result);
         } catch (err) {
              console.error("Error deleting product (admin):", err);
              res.status(500).json({ message: "Error deleting product." });
         }
     });
-
-
-    // --- ADMIN CATEGORY ROUTES ---
-     router.post('/categories', async (req, res) => {
-         console.log("Received request for ADMIN POST /categories");
-         // Add auth check
-         try {
-             const { name } = req.body;
-             if (!name) return res.status(400).json({ message: "Category name required." });
-             const existing = await db.collection('categories').findOne({ name: name });
-             if (existing) return res.status(409).json({ message: "Category already exists." });
-             await db.collection('categories').insertOne({ name });
-             res.status(201).json({ message: "Category added." });
-         } catch (err) {
-             console.error("Error adding category (admin):", err);
-             res.status(500).json({ message: "Error adding category." });
-         }
-     });
-
-     router.delete('/categories/:name', async (req, res) => {
-         console.log(`Received request for ADMIN DELETE /categories/${req.params.name}`);
-         // Add auth check
-         try {
-             const categoryName = decodeURIComponent(req.params.name);
-             const result = await db.collection('categories').deleteOne({ name: categoryName });
-             if (result.deletedCount === 0) return res.status(404).json({ message: "Category not found." });
-             res.status(200).json({ message: "Category deleted." });
-         } catch (err) {
-             console.error("Error deleting category (admin):", err);
-             res.status(500).json({ message: "Error deleting category." });
-         }
-     });
 
     // Return the configured router
     return router;
