@@ -6,11 +6,11 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-// --- CONNECT TO FRONTEND (UPDATED) ---
+// --- CONNECT TO FRONTEND (THE FIX IS HERE) ---
 // This list now allows both your websites to connect
 const allowedOrigins = [
     'https://susegad-supplies-frontend.onrender.com', // Your main customer site
-    'https://susegad-admin.onrender.com/',     // ⬇️ *** REPLACE THIS with your new admin URL *** ⬇️
+    'https://susegad-admin.onrender.com',             // YOUR ADMIN SITE
     'http://localhost:5500',                         // For local testing
     'http://127.0.0.1:5500'                          // For local testing
 ];
@@ -47,9 +47,8 @@ async function startServer() {
         const database = client.db("susegad_supplies");
         console.log("✅ Successfully connected to MongoDB!");
 
-        // Initialize and use your single routes file
         const apiRouter = initializeApiRoutes(database);
-        app.use('/', apiRouter); // All routes will be at the root (e.g., /login, /products)
+        app.use('/', apiRouter);
         console.log("✅ API routes registered.");
 
         app.listen(port, () => {
