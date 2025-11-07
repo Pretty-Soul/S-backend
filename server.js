@@ -1,16 +1,33 @@
 require('dotenv').config();
-const express = require('express'); // <-- This was the main error fix
+const express = require('express');
 const { MongoClient } = require('mongodb');
 const cors = require('cors');
 
 const app = express();
 const port = 3000;
 
-// --- CONNECT TO FRONTEND ---
-// Set this to your live frontend URL on Render (or Netlify)
-const frontendUrl = 'https://susegad-supplies-frontend.onrender.com';
+// --- CONNECT TO FRONTEND (UPDATED) ---
+// This list now allows both your websites to connect
+const allowedOrigins = [
+    'https://susegad-supplies-frontend.onrender.com', // Your main customer site
+    'https://susegad-admin.onrender.com',     // ⬇️ *** REPLACE THIS with your new admin URL *** ⬇️
+    'http://localhost:5500',                         // For local testing
+    'http://127.0.0.1:5500'                          // For local testing
+];
 
-app.use(cors({ origin: frontendUrl }));
+app.use(cors({ 
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, or Postman)
+        if (!origin) return callback(null, true);
+
+        // Check if the incoming origin is in our allowed list
+        if (allowedOrigins.indexOf(origin) === -1) {
+            var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    }
+}));
 app.use(express.json());
 // --- END ---
 
@@ -32,7 +49,7 @@ async function startServer() {
 
         // Initialize and use your single routes file
         const apiRouter = initializeApiRoutes(database);
-        app.use('/', apiRouter);
+        app.use('/', apiRouter); // All routes will be at the root (e.g., /login, /products)
         console.log("✅ API routes registered.");
 
         app.listen(port, () => {
