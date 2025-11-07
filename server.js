@@ -10,7 +10,7 @@ const port = 3000;
 // This list now allows both your websites to connect
 const allowedOrigins = [
     'https://susegad-supplies-frontend.onrender.com', // Your main customer site
-    'https://susegad-admin.onrender.com',     // ⬇️ *** REPLACE THIS with your new admin URL *** ⬇️
+    'https://susegad-admin.onrender.com/',     // ⬇️ *** REPLACE THIS with your new admin URL *** ⬇️
     'http://localhost:5500',                         // For local testing
     'http://127.0.0.1:5500'                          // For local testing
 ];
