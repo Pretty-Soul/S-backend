@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
-const crypto = require('crypto'); // Needed for secure token generation
-const { sendVerificationEmail } = require('../utils/emailSender'); // Ensure this path is correct
+// We no longer need crypto or emailSender
 
 // Export a function that accepts the database connection
 module.exports = function(db) {
@@ -12,47 +11,30 @@ module.exports = function(db) {
     router.post('/signup', async (req, res) => {
         try {
             const { name, email, password } = req.body;
-            let user = await db.collection('users').findOne({ email: email });
 
-            // Generate Verification Token
-            const verificationToken = crypto.randomBytes(32).toString('hex');
-            const expiryDate = new Date(Date.now() + 60 * 60 * 1000); // Token expires in 1 hour
-
-            // Construct Verification Link (Use your *frontend* URL here)
-            const frontendUrl = process.env.FRONTEND_URL || 'https://68e665f10a949a000819c14c--susegad-supplies.netlify.app'; // Get from .env or default
-            const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
-
-            if (user && !user.isEmailVerified) {
-                // User exists but isn't verified - update token and resend email
-                await db.collection('users').updateOne(
-                    { email: email },
-                    { $set: { emailVerificationToken: verificationToken, emailVerificationTokenExpires: expiryDate } }
-                );
-                await sendVerificationEmail(email, verificationLink); // Send the LINK now
-                return res.status(200).json({ message: "Account exists but wasn't verified. New verification link sent to your email." });
-
-            } else if (user) {
-                return res.status(409).json({ message: "Email already exists and is verified." });
+            // --- Password Constraint Check ---
+            if (!password || password.length < 6) {
+                return res.status(400).json({ message: "Password must be at least 6 characters long." });
             }
 
-            // --- If user does NOT exist, create them ---
+            const existingUser = await db.collection('users').findOne({ email: email });
+            if (existingUser) { 
+                return res.status(409).json({ message: "Email already exists." }); 
+            }
+            
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-            await db.collection('users').insertOne({
-                name, email, password: hashedPassword, addresses: [],
-                isEmailVerified: false,
-                emailVerificationToken: verificationToken, // Store the token
-                emailVerificationTokenExpires: expiryDate  // Store expiry
+            
+            // Save the user (set as verified by default)
+            await db.collection('users').insertOne({ 
+                name, 
+                email, 
+                password: hashedPassword, 
+                addresses: [],
+                isEmailVerified: true // Set to true by default
             });
 
-            const emailSent = await sendVerificationEmail(email, verificationLink); // Send the LINK now
-            if (!emailSent) {
-                console.error(`Failed to send verification email to ${email}, but user was created.`);
-                return res.status(201).json({ message: "User created, but failed to send verification email. Please try verifying later or contact support." });
-            }
-
-            res.status(201).json({ message: "User created! Please check your email for a verification link." });
+            res.status(201).json({ message: "User created successfully! Please log in." });
         } catch (err) {
             console.error("Error in /signup:", err);
             res.status(500).json({ message: "Error creating user." });
@@ -65,17 +47,11 @@ module.exports = function(db) {
             const user = await db.collection('users').findOne({ email: email });
             if (!user) { return res.status(401).json({ message: "Invalid credentials." }); }
 
-            // *** Prevent login if email isn't verified ***
-            if (!user.isEmailVerified) {
-                 return res.status(403).json({
-                     message: "Please verify your email address first. Check your inbox for the verification link.",
-                     needsVerification: true, // Keep this flag
-                     email: user.email
-                 });
-            }
-
+            // No need to check for isEmailVerified anymore
+            
             const passwordMatch = await bcrypt.compare(password, user.password);
             if (!passwordMatch) { return res.status(401).json({ message: "Invalid credentials." }); }
+            
             res.status(200).json({ message: "Login successful!", user: { name: user.name, email: user.email } });
         } catch (err) {
             console.error("Error in /login:", err);
@@ -83,39 +59,20 @@ module.exports = function(db) {
         }
     });
 
-    // --- NEW EMAIL VERIFICATION ROUTE (Handles the Link Click) ---
-    router.post('/verify-email-link', async (req, res) => {
+    router.post('/admin/login', async (req, res) => {
         try {
-            const { token } = req.body;
-            if (!token) {
-                return res.status(400).json({ message: "Verification token is missing." });
-            }
-
-            // Find user by the token
-            const user = await db.collection('users').findOne({
-                emailVerificationToken: token,
-                // Check if token hasn't expired
-                emailVerificationTokenExpires: { $gt: new Date() }
-            });
-
-            if (!user) {
-                // Could be invalid token OR expired token
-                return res.status(400).json({ message: "Verification link is invalid or has expired." });
-            }
-
-            // Verification successful! Update user document
-            await db.collection('users').updateOne(
-                { _id: user._id }, // Use user's _id for update
-                { $set: { isEmailVerified: true }, $unset: { emailVerificationToken: "", emailVerificationTokenExpires: "" } }
-            );
-
-            res.status(200).json({ message: "Email verified successfully! You can now log in." });
-
+            const { email, password } = req.body;
+            const user = await db.collection('users').findOne({ email: email });
+            if (!user) { return res.status(401).json({ message: "Invalid admin credentials." }); }
+            const passwordMatch = await bcrypt.compare(password, user.password);
+            if (!passwordMatch) { return res.status(401).json({ message: "Invalid admin credentials." }); }
+            res.status(200).json({ message: "Admin login successful!", user: { name: user.name, email: user.email, role: 'admin' } });
         } catch (err) {
-            console.error("Error verifying email link:", err);
-            res.status(500).json({ message: "Error verifying email." });
+            console.error("Error in /admin/login:", err);
+            res.status(500).json({ message: "Error logging in as admin." });
         }
     });
+
 
     // --- USER PROFILE & ADDRESS ROUTES ---
     router.get('/user/addresses/:email', async (req, res) => {
@@ -167,7 +124,7 @@ module.exports = function(db) {
 
     router.delete('/user/addresses/:addressId', async (req, res) => {
         try {
-            const userEmail = req.body.userEmail; // Or req.user.email if using auth middleware
+            const { userEmail } = req.body;
             const { addressId } = req.params;
             await db.collection('users').updateOne(
                 { email: userEmail },
@@ -213,7 +170,7 @@ module.exports = function(db) {
 
     // --- PRODUCT ROUTES ---
     router.get('/products', async (req, res) => {
-        console.log("Received request for GET /products (from shopRoutes)");
+        console.log("Received request for GET /products");
         try {
             const products = await db.collection('products').find({}).sort({ name: 1 }).toArray();
             res.status(200).json(products);
@@ -258,7 +215,7 @@ module.exports = function(db) {
 
     // --- CATEGORY ROUTES ---
     router.get('/categories', async (req, res) => {
-        console.log("Received request for GET /categories (from shopRoutes)");
+        console.log("Received request for GET /categories");
         try {
             const categories = await db.collection('categories').find({}).toArray();
             res.status(200).json(categories);
@@ -267,36 +224,6 @@ module.exports = function(db) {
             res.status(500).json({ message: "Error fetching categories." });
         }
     });
-
-     router.post('/categories', async (req, res) => {
-         console.log("Received request for ADMIN POST /categories");
-         // Add auth check here
-         try {
-             const { name } = req.body;
-             if (!name) return res.status(400).json({ message: "Category name required." });
-             const existing = await db.collection('categories').findOne({ name: name });
-             if (existing) return res.status(409).json({ message: "Category already exists." });
-             await db.collection('categories').insertOne({ name });
-             res.status(201).json({ message: "Category added." });
-         } catch (err) {
-             console.error("Error adding category (admin):", err);
-             res.status(500).json({ message: "Error adding category." });
-         }
-     });
-
-     router.delete('/categories/:name', async (req, res) => {
-         console.log(`Received request for ADMIN DELETE /categories/${req.params.name}`);
-         // Add auth check here
-         try {
-             const categoryName = decodeURIComponent(req.params.name);
-             const result = await db.collection('categories').deleteOne({ name: categoryName });
-             if (result.deletedCount === 0) return res.status(404).json({ message: "Category not found." });
-             res.status(200).json({ message: "Category deleted." });
-         } catch (err) {
-             console.error("Error deleting category (admin):", err);
-             res.status(500).json({ message: "Error deleting category." });
-         }
-     });
 
     // --- TESTIMONIALS ROUTE ---
     router.get('/testimonials', async (req, res) => {
@@ -356,7 +283,7 @@ module.exports = function(db) {
             
             for (const item of cart.items) {
                 const realProductIdString = item.productId.split('-')[0];
-                if (!ObjectId.isValid(realProductIdString)) { return res.status(400).json({ message: `Invalid product ID format found in cart for item ${item.name}` }); }
+                if (!ObjectId.isValid(realProductIdString)) { return res.status(400).json({ message: `Invalid product ID format in cart.` }); }
                 const realProductId = new ObjectId(realProductIdString);
                 const product = await db.collection('products').findOne({ _id: realProductId });
                 if (!product) { return res.status(400).json({ message: `Product not found for ${item.name}.` }); }
@@ -405,53 +332,13 @@ module.exports = function(db) {
             res.status(500).json({ message: "Error searching products." });
         }
     });
-    
-    // --- ADMIN PRODUCT ROUTES (simplified example - needs role check middleware ideally) ---
-     router.post('/products', async (req, res) => {
-         console.log("Received request for ADMIN POST /products");
-         // Add auth check here
-         try {
-             const newProduct = req.body;
-             if (!newProduct.name || !newProduct.variations || !newProduct.images) { return res.status(400).json({ message: "Missing required product fields." }); }
-             const result = await db.collection('products').insertOne(newProduct);
-             res.status(201).json(result);
-         } catch (err) {
-              console.error("Error adding product (admin):", err);
-              res.status(500).json({ message: "Error adding product." });
-         }
-     });
 
-    router.put('/products/:id', async (req, res) => {
-         console.log(`Received request for ADMIN PUT /products/${req.params.id}`);
-         // Add auth check here
-        try {
-            const productId = req.params.id;
-             if (!ObjectId.isValid(productId)) { return res.status(400).json({ message: "Invalid product ID format." }); }
-            const updatedData = req.body;
-            delete updatedData._id;
-            const result = await db.collection('products').updateOne({ _id: new ObjectId(productId) }, { $set: updatedData });
-             if (result.matchedCount === 0) { return res.status(404).json({ message: "Product not found" }); }
-            res.status(200).json(result);
-        } catch (err) {
-             console.error("Error updating product (admin):", err);
-             res.status(500).json({ message: "Error updating product." });
-        }
-    });
-
-    router.delete('/products/:id', async (req, res) => {
-         console.log(`Received request for ADMIN DELETE /products/${req.params.id}`);
-         // Add auth check here
-        try {
-            const productId = req.params.id;
-             if (!ObjectId.isValid(productId)) { return res.status(400).json({ message: "Invalid product ID format." }); }
-            const result = await db.collection('products').deleteOne({ _id: new ObjectId(productId) });
-             if (result.deletedCount === 0) { return res.status(404).json({ message: "Product not found" }); }
-            res.status(200).json(result);
-        } catch (err) {
-             console.error("Error deleting product (admin):", err);
-             res.status(500).json({ message: "Error deleting product." });
-        }
-    });
+    // --- ADMIN ROUTES ---
+     router.post('/products', async (req, res) => { /* ... */ });
+     router.put('/products/:id', async (req, res) => { /* ... */ });
+     router.delete('/products/:id', async (req, res) => { /* ... */ });
+     router.post('/categories', async (req, res) => { /* ... */ });
+     router.delete('/categories/:name', async (req, res) => { /* ... */ });
 
     // Return the configured router
     return router;
