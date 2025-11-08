@@ -6,7 +6,7 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-// --- CORS Configuration (No changes needed) ---
+// --- CORS Configuration ---
 const allowedOrigins = [
     'https://susegad-supplies-frontend.onrender.com',
     'https://susegad-admin.onrender.com',
@@ -35,7 +35,7 @@ const client = new MongoClient(uri);
 
 // --- Import BOTH route files ---
 const initializeApiRoutes = require('./routes/shopRoutes'); 
-const initializeAdminRoutes = require('./routes/adminRoutes'); // 1. IMPORT new file
+const initializeAdminRoutes = require('./routes/adminRoutes'); 
 
 async function startServer() {
     try {
@@ -43,13 +43,14 @@ async function startServer() {
         const database = client.db("susegad_supplies");
         console.log("✅ Successfully connected to MongoDB!");
 
-        // --- Initialize BOTH routers ---
-        const apiRouter = initializeApiRoutes(database);
-        const adminRouter = initializeAdminRoutes(database); // 2. INITIALIZE new router
+        // --- Initialize BOTH routers (Pass client to shopRoutes) ---
+        // 1. We now pass 'client' to shopRoutes for transactions
+        const apiRouter = initializeApiRoutes(database, client); 
+        const adminRouter = initializeAdminRoutes(database); 
 
         // --- Use BOTH routers with prefixes ---
-        app.use('/', apiRouter); // 3. Public routes are at the root
-        app.use('/admin', adminRouter); // 4. Admin routes are at /admin
+        app.use('/', apiRouter); // Public routes are at the root
+        app.use('/admin', adminRouter); // Admin routes are at /admin
         
         console.log("✅ API routes registered.");
         console.log("✅ Admin routes registered at /admin");
