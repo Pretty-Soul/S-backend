@@ -301,56 +301,102 @@ module.exports = function(db) {
     });
 
     // --- FINAL CHECKOUT ROUTE ---
-    router.post('/checkout', async (req, res) => {
-        console.log("Received request for POST /checkout");
-        try {
-            const { userEmail, shippingAddress, shippingMethod, totalAmount } = req.body;
-            const cart = await db.collection('carts').findOne({ userEmail });
-            if (!cart || cart.items.length === 0) { return res.status(400).json({ message: "Cart is empty." }); }
-            
-            // 1. STOCK VALIDATION AND DEDUCTION LOOP
-            for (const item of cart.items) {
-                const realProductIdString = item.productId.split('-')[0];
-                if (!ObjectId.isValid(realProductIdString)) { return res.status(400).json({ message: `Invalid product ID format in cart.` }); }
-                const realProductId = new ObjectId(realProductIdString);
-                
-                // Fetch product for stock check
-                const product = await db.collection('products').findOne({ _id: realProductId });
-
-                if (!product) { 
-                    return res.status(400).json({ message: `Product not found for ${item.name}.` }); 
-                }
-
-                const currentStock = product.variations[0].stock;
-                
-                // Stock Check: Ensure there is enough stock
-                if (currentStock < item.quantity) {
-                    return res.status(400).json({ message: `Not enough stock for ${item.name}. Only ${currentStock} remaining.` });
-                }
-
-                // STOCK DEDUCTION: Use $inc to decrease stock
-                await db.collection('products').updateOne(
-                    { _id: realProductId, "variations.0.stock": { $gte: item.quantity } }, // Ensure stock is still available
-                    { $inc: { "variations.0.stock": -item.quantity } }
-                );
+    // --- FINAL CHECKOUT ROUTE (CORRECTED WITH TRANSACTION) ---
+    router.post('/checkout', async (req, res) => {
+        console.log("Received request for POST /checkout (Transactional)");
+        const session = db.client.startSession(); // Start a MongoDB Client Session
+        
+        try {
+            session.startTransaction(); // Begin the transaction
+            
+            const { userEmail, shippingAddress, shippingMethod, totalAmount } = req.body;
+            
+            // Fetch cart using the current session
+            const cart = await db.collection('carts').findOne({ userEmail }, { session });
+            if (!cart || cart.items.length === 0) { 
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(400).json({ message: "Cart is empty." }); 
             }
-            
-            // 2. ORDER INSERTION
-            const order = { userEmail, items: cart.items, totalAmount: totalAmount, shippingAddress, shippingMethod, orderDate: new Date() };
-            const insertResult = await db.collection('orders').insertOne(order);
-            
-            // 3. CART DELETION (Clear the cart in the database)
-            await db.collection('carts').deleteOne({ userEmail });
-            
-            // 4. FIND NEW ORDER (for confirmation page)
-            const newOrder = await db.collection('orders').findOne({ _id: insertResult.insertedId });
+            
+            // 1. STOCK VALIDATION AND DEDUCTION LOOP
+            for (const item of cart.items) {
+                // Assuming your cart item structure for productId includes the product's _id-variationIndex
+                const parts = item.productId.split('-');
+                const realProductIdString = parts[0];
+                const variationIndex = parseInt(parts[1], 10) || 0; // Default to index 0 if not present
 
-            res.status(200).json({ message: "Order placed successfully!", order: newOrder });
-        } catch (err) {
-            console.error("Error in /checkout:", err);
-            res.status(500).json({ message: "Error during checkout." });
-        }
-    });
+                if (!ObjectId.isValid(realProductIdString)) { 
+                    await session.abortTransaction();
+                    session.endSession();
+                    return res.status(400).json({ message: `Invalid product ID format in cart.` }); 
+                }
+                const realProductId = new ObjectId(realProductIdString);
+                
+                // Fetch product for stock check (within the transaction)
+                const product = await db.collection('products').findOne({ _id: realProductId }, { session });
+
+                if (!product || !product.variations || !product.variations[variationIndex]) { 
+                    await session.abortTransaction();
+                    session.endSession();
+                    return res.status(400).json({ message: `Product variation not found for ${item.name}.` }); 
+                }
+
+                const currentStock = product.variations[variationIndex].stock;
+                
+                // Stock Check: Ensure there is enough stock
+                if (currentStock < item.quantity) {
+                    await session.abortTransaction();
+                    session.endSession();
+                    return res.status(400).json({ message: `Not enough stock for ${item.name}. Only ${currentStock} remaining.` });
+                }
+
+                // STOCK DEDUCTION: Use $inc to decrease stock
+                // Note: We use the dynamic index from the cart item
+                const updatePath = `variations.${variationIndex}.stock`;
+                
+                const updateResult = await db.collection('products').updateOne(
+                    { _id: realProductId, [updatePath]: { $gte: item.quantity } }, // Ensure stock is still available
+                    { $inc: { [updatePath]: -item.quantity } },
+                    { session } // Pass the session here!
+                );
+
+                // Important check: If the update didn't match any documents, something is wrong
+                if (updateResult.matchedCount === 0) {
+                    // This often means a race condition where stock was sold out between read and update
+                    await session.abortTransaction();
+                    session.endSession();
+                    return res.status(400).json({ message: `Stock update failed for ${item.name}. It may have just sold out.` });
+                }
+            }
+            
+            // 2. ORDER INSERTION (Within the transaction)
+            const order = { userEmail, items: cart.items, totalAmount: totalAmount, shippingAddress, shippingMethod, orderDate: new Date() };
+            const insertResult = await db.collection('orders').insertOne(order, { session });
+            
+            // 3. CART DELETION (Clear the cart in the database - Within the transaction)
+            await db.collection('carts').deleteOne({ userEmail }, { session });
+            
+            // 4. COMMIT the transaction (All or nothing)
+            await session.commitTransaction();
+            
+            // 5. Clean up the session
+            session.endSession();
+
+            // 6. Respond to the client
+            const newOrder = await db.collection('orders').findOne({ _id: insertResult.insertedId });
+            res.status(200).json({ message: "Order placed successfully!", order: newOrder });
+
+        } catch (err) {
+            console.error("Error in /checkout (ABORTING TRANSACTION):", err);
+            // Abort the transaction if any error occurred
+            if (session.inTransaction()) {
+                await session.abortTransaction();
+            }
+            session.endSession();
+            res.status(500).json({ message: "Error during checkout. Transaction aborted.", details: err.message });
+        }
+    });
 
     router.get('/orders/:email', async (req, res) => {
         console.log(`Received request for GET /orders/${req.params.email}`);
