@@ -379,7 +379,7 @@ module.exports = function(db) {
             res.status(200).json(result);
         } catch (err) {
              console.error("Error deleting product (admin):", err);
-             res.status(5U00).json({ message: "Error deleting product." });
+             res.status(500).json({ message: "Error deleting product." });
         }
     });
     
