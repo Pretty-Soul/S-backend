@@ -1,73 +1,86 @@
-require('dotenv').config();
-const express = require('express');
-const { MongoClient } = require('mongodb');
-const cors = require('cors');
+// server.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { MongoClient } from "mongodb";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// Import route modules
+import shopRoutes from "./routes/shopRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
+
+dotenv.config();
 
 const app = express();
-const port = 3000;
-
-// --- CORS Configuration ---
-const allowedOrigins = [
-    'https://susegad-supplies-frontend.onrender.com',
-    'https://susegad-admin.onrender.com',
-    'http://localhost:5500',
-    'http://127.0.0.1:5500'
-];
-app.use(cors({ 
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
-        }
-        return callback(null, true);
-    }
-}));
 app.use(express.json());
-// --- END ---
 
-const uri = process.env.MONGO_URI;
-if (!uri) {
-    console.error("FATAL ERROR: MONGO_URI environment variable is not set.");
-    process.exit(1); 
-}
-const client = new MongoClient(uri);
+// --- ✅ CORS: Only allow your frontend & admin dashboard ---
+const allowedOrigins = [
+  "https://susegad-supplies-frontend.onrender.com",
+  "https://susegad-admin.onrender.com"
+];
 
-// --- Import BOTH route files ---
-// Assuming shopRoutes contains public, cart, and checkout logic (needs client for transactions)
-const initializeShopRoutes = require('./routes/shopRoutes'); 
-// Assuming adminRoutes contains product/category CRUD (only needs database)
-const initializeAdminRoutes = require('./routes/adminRoutes'); 
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`❌ Blocked CORS request from origin: ${origin}`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+  })
+);
 
+// --- ✅ MongoDB Connection ---
+const mongoURL = process.env.MONGO_URI;
+const client = new MongoClient(mongoURL, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+let db;
+
+// --- Helpers for serving static files if needed ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// --- Connect to DB and start server ---
 async function startServer() {
-    try {
-        await client.connect();
-        const database = client.db("susegad_supplies");
-        console.log("✅ Successfully connected to MongoDB!");
+  try {
+    await client.connect();
+    db = client.db(process.env.DB_NAME || "susegad_db");
+    console.log("✅ Connected to MongoDB");
 
-        // --- Initialize BOTH routers (Pass client to shopRoutes for transactions) ---
-        // shopRoutes now receives the database and the MongoClient instance
-        const shopRouter = initializeShopRoutes(database, client); 
-        // adminRoutes only needs the database instance
-        const adminRouter = initializeAdminRoutes(database); 
+    // --- ✅ Mount Routes ---
+    app.use("/shop", shopRoutes(db)); // customer site
+    app.use("/admin", adminRoutes(db)); // admin site
 
-        // --- Use routers with prefixes ---
-        app.use('/', shopRouter); // Public routes (including checkout)
-        app.use('/admin', adminRouter); // Admin routes are at /admin
-        
-        console.log("✅ Shop/API routes registered.");
-        console.log("✅ Admin routes registered at /admin");
+    // --- Optional: Serve static build if backend + frontend in one Render app ---
+    const frontendPath = path.join(__dirname, "client", "dist");
+    app.use(express.static(frontendPath));
 
-        app.listen(port, () => {
-            console.log(`🚀 Server listening on port ${port}`);
-        });
+    app.get("/", (req, res) => {
+      res.send("🟢 Susegad Supplies API is running!");
+    });
 
-    } catch (err) {
-        console.error("Failed to start server", err);
-        // Ensure client is closed on failure
-        await client.close(); 
-        process.exit(1);
-    }
+    // SPA fallback (optional if serving frontend separately)
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(frontendPath, "index.html"));
+    });
+
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error("❌ Failed to start server:", err);
+    process.exit(1);
+  }
 }
 
 startServer();
