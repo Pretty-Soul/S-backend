@@ -17,7 +17,7 @@ app.use(express.json());
 
 // --- ✅ CORS: Only allow your frontend & admin dashboard ---
 const allowedOrigins = [
-  "https://susegad-supplies-frontend.onrender.com",
+  "https://s-frontend-nzij.onrender.com",
   "https://susegad-admin.onrender.com"
 ];
 
