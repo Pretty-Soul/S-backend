@@ -69,7 +69,7 @@ async function startServer() {
     });
 
     // SPA fallback (optional if serving frontend separately)
-    app.get("*", (req, res) => {
+    app.get('/*', (req, res) => {
       res.sendFile(path.join(frontendPath, "index.html"));
     });
 
