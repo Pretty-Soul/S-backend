@@ -59,12 +59,12 @@ async function startServer() {
     const frontendPath = path.join(__dirname, "client", "dist");
     app.use(express.static(frontendPath));
 
-    app.get("/", (req, res) => {
+        app.get("/", (req, res) => {
       res.send("🟢 Susegad Supplies API is running!");
     });
 
-    // ✅ FIXED fallback route (Express 5+ safe)
-    app.get("*", (req, res) => {
+    // ✅ FIX: Regex-based wildcard for SPA (Express 5 safe)
+    app.get(/.*/, (req, res) => {
       res.sendFile(path.resolve(frontendPath, "index.html"));
     });
 
@@ -72,6 +72,7 @@ async function startServer() {
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
     });
+
   } catch (err) {
     console.error("❌ Failed to start server:", err);
     process.exit(1);
