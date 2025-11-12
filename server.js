@@ -6,7 +6,6 @@ import { MongoClient } from "mongodb";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Import route modules
 import shopRoutes from "./routes/shopRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 
@@ -15,7 +14,7 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// --- ✅ CORS: Only allow your frontend & admin dashboard ---
+// --- ✅ CORS setup ---
 const allowedOrigins = [
   "https://s-frontend-nzij.onrender.com",
   "https://susegad-admin.onrender.com"
@@ -38,18 +37,14 @@ app.use(
 
 // --- ✅ MongoDB Connection ---
 const mongoURL = process.env.MONGO_URI;
-const client = new MongoClient(mongoURL, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+const client = new MongoClient(mongoURL);
 
 let db;
 
-// --- Helpers for serving static files if needed ---
+// --- Helpers for serving static files ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- Connect to DB and start server ---
 async function startServer() {
   try {
     await client.connect();
@@ -57,10 +52,10 @@ async function startServer() {
     console.log("✅ Connected to MongoDB");
 
     // --- ✅ Mount Routes ---
-    app.use("/shop", shopRoutes(db)); // customer site
-    app.use("/admin", adminRoutes(db)); // admin site
+    app.use("/shop", shopRoutes(db));
+    app.use("/admin", adminRoutes(db));
 
-    // --- Optional: Serve static build if backend + frontend in one Render app ---
+    // --- ✅ Serve frontend if bundled ---
     const frontendPath = path.join(__dirname, "client", "dist");
     app.use(express.static(frontendPath));
 
@@ -68,9 +63,9 @@ async function startServer() {
       res.send("🟢 Susegad Supplies API is running!");
     });
 
-    // SPA fallback (optional if serving frontend separately)
-    app.get('/*', (req, res) => {
-      res.sendFile(path.join(frontendPath, "index.html"));
+    // ✅ FIXED fallback route (Express 5+ safe)
+    app.get("*", (req, res) => {
+      res.sendFile(path.resolve(frontendPath, "index.html"));
     });
 
     const PORT = process.env.PORT || 5000;
